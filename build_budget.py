@@ -1,0 +1,834 @@
+# -*- coding: utf-8 -*-
+"""가족 공동 가계부(대시보드형) 생성 스크립트."""
+import datetime as dt
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.chart import BarChart, PieChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.chart.marker import DataPoint
+from openpyxl.drawing.line import LineProperties
+from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import DataBarRule, CellIsRule, FormulaRule
+
+OUT = r"C:\Users\Osstem\우리집_가계부.xlsx"
+F = "맑은 고딕"
+
+# ---------- 색상 (밝은 진노랑 포인트 + 파스텔) ----------
+WHITE  = "FFFFFF"
+INK    = "3A3330"   # 본문 텍스트(진한 웜 차콜)
+GRAY   = "857F78"   # 보조 텍스트(캡션·헬퍼)
+LINE   = "EFE9DD"   # 옅은 가로 구분선
+BORDC  = "EFE9DD"
+HEADL  = "FFF6D8"   # 표 헤더 보조(연노랑)
+ZEBRA  = "FFFDF5"   # 줄무늬(아주 연한 노랑빛 화이트)
+CARD   = "FFFDF5"
+LIGHT  = "FFF6D8"
+NAVY   = "8BC34A"   # 타이틀 바/합계 배경(연두)
+TEAL   = "FFC72C"   # 차트 포인트(밝은 진노랑)
+HEAD_TX= "33450F"   # 연두 배경 위 글씨(다크 올리브그린)
+SECTION= "33450F"   # 섹션 헤더(다크 올리브그린)
+HEAD_BG= "DCEDC8"   # 표 헤더 배경(연한 연두 — 시트색과 통일)
+BLUE   = "8FAAC9"
+BRAND  = "FFC72C"
+INCOME = "7C9885"   # 수입(파스텔 세이지)
+EXPENSE= "CC8B96"   # 지출(더스티 로즈)
+SAVE   = "7E9BBE"   # 저축(더스티 블루)
+AMBER  = "E0A21E"   # 소비/데이터바(골든)
+VIOLET = "9787BE"   # 저축률(더스티 라벤더)
+SLATE  = "9A9286"   # 순잔액(웜 그레이)
+# 카드 틴트 배경(아주 연한 파스텔)
+T_INCOME="EEF4EE"; T_EXPENSE="FAF0F2"; T_SAVE="EFF3F8"
+T_AMBER="FFF4DA"; T_VIOLET="F4F1F9"; T_INK="FBF6EC"
+INPUTF = "FFEFB0"   # 입력 셀(연노랑)
+INPUTC = "8A5A00"   # 입력 글씨(진 골든브라운)
+
+# ---------- 숫자 포맷 ----------
+WON  = '"₩"#,##0;[Red]"-₩"#,##0;"-"'
+WON0 = '"₩"#,##0'
+PCT  = '0.0%'
+DATEF= 'yyyy-mm-dd'
+
+# ---------- 공용 스타일 ----------
+thin = Side(style="thin", color=BORDC)
+B_ALL = Border(bottom=Side(style="thin", color=LINE))        # 격자 제거 → 가로 구분선만
+B_BOT = Border(bottom=Side(style="thin", color=GRAY))
+HEAD_B = Border(bottom=Side(style="medium", color=TEAL))     # 표 헤더 하단 강조선
+CEN = Alignment(horizontal="center", vertical="center")
+LEF = Alignment(horizontal="left", vertical="center")
+RIG = Alignment(horizontal="right", vertical="center")
+CENW= Alignment(horizontal="center", vertical="center", wrap_text=True)
+LEFW= Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+def F_(size=11, bold=False, color="222222", italic=False):
+    return Font(name=F, size=size, bold=bold, color=color, italic=italic)
+
+def put(ws, coord, value=None, font=None, fill=None, align=None,
+        border=None, fmt=None):
+    c = ws[coord]
+    if value is not None: c.value = value
+    if font:   c.font = font
+    if fill:   c.fill = PatternFill("solid", fgColor=fill)
+    if align:  c.alignment = align
+    if border: c.border = border
+    if fmt:    c.number_format = fmt
+    return c
+
+def merge(ws, rng):
+    ws.merge_cells(rng)
+
+def fill_block(ws, rng, fill=None, border=None, font=None, align=None):
+    for row in ws[rng]:
+        for c in row:
+            if fill: c.fill = PatternFill("solid", fgColor=fill)
+            if border: c.border = border
+            if font: c.font = font
+            if align: c.alignment = align
+
+# =====================================================================
+wb = Workbook()
+
+S_GUIDE="시작하기"; S_SET="설정"; S_LED="거래내역"
+S_DASH="대시보드"; S_REP="기간리포트"; S_INS="진단&인사이트"
+
+ws_guide = wb.active; ws_guide.title = S_GUIDE
+ws_set   = wb.create_sheet(S_SET)
+ws_led   = wb.create_sheet(S_LED)
+ws_dash  = wb.create_sheet(S_DASH)
+ws_rep   = wb.create_sheet(S_REP)
+ws_ins   = wb.create_sheet(S_INS)
+
+# 탭 색
+ws_guide.sheet_properties.tabColor = "4A6FA5"
+ws_set.sheet_properties.tabColor   = "7F8C8D"
+ws_led.sheet_properties.tabColor   = "27AE60"
+ws_dash.sheet_properties.tabColor  = NAVY
+ws_rep.sheet_properties.tabColor   = TEAL
+ws_ins.sheet_properties.tabColor   = "D97706"
+
+# 전 시트 기본 행 높이(여백 확대)
+for _ws in wb.worksheets:
+    _ws.sheet_format.defaultRowHeight = 18.5
+
+# =====================================================================
+# 마스터 데이터
+expense_cats = [
+    ("식비/장보기",      "변동", 600000),
+    ("외식/배달/카페",   "변동", 300000),
+    ("생활/소모품",      "변동", 150000),
+    ("주거/관리비",      "고정", 550000),
+    ("통신/구독",        "고정", 160000),
+    ("교통/차량",        "변동", 250000),
+    ("의료/건강",        "변동", 120000),
+    ("교육/육아",        "고정", 450000),
+    ("문화/여가",        "변동", 200000),
+    ("의류/미용",        "변동", 150000),
+    ("경조사/선물",      "변동", 100000),
+    ("보험",            "고정", 300000),
+    ("저축/투자",        "고정", 800000),
+    ("기타",            "변동", 100000),
+]
+income_cats = ["급여", "상여/성과급", "사업/부업", "금융수입(이자/배당)", "기타수입"]
+members = ["본인", "배우자", "공동", "자녀"]
+methods = ["현금", "체크카드", "신용카드", "계좌이체", "간편결제(페이)", "기타"]
+types   = ["수입", "지출", "이체"]
+
+# =====================================================================
+# 거래내역 범위 상수 (헤더 1행, 데이터 2~NROW+1)
+NROW = 1200
+r1, r2 = 2, NROW + 1
+def L(col): return f"{S_LED}!${col}${r1}:${col}${r2}"
+G_=L("G"); I_=L("I"); J_=L("J"); B_=L("B"); C_=L("C"); E_=L("E"); K_=L("K"); Lq=L("L")
+
+#######################################################################
+# 1) 설정 시트
+#######################################################################
+ws = ws_set
+ws.sheet_view.showGridLines = False
+for col,w in {"A":2.5,"B":20,"C":14,"D":12,"E":18,"F":18,"G":18,"H":22,"I":12}.items():
+    ws.column_dimensions[col].width = w
+
+merge(ws,"B1:I1")
+put(ws,"B1","⚙️  설정  —  이 시트의 값만 바꾸면 전체 가계부에 반영됩니다",
+    F_(19,True,HEAD_TX), NAVY, LEF)
+ws.row_dimensions[1].height = 40
+put(ws,"B2","노란색 칸(파란 글씨)이 직접 입력하는 칸입니다.", F_(9,False,GRAY), align=LEF)
+
+# 기준 기간
+put(ws,"B4","■ 기준 기간 (대시보드·리포트가 이 기간을 표시)", F_(11,True,SECTION))
+put(ws,"B5","기준 연도", F_(10,True), HEADL, LEF, B_ALL)
+put(ws,"C5", 2026, F_(11,True,INPUTC), INPUTF, CEN, B_ALL); ws["C5"].number_format='0'
+put(ws,"B6","기준 월", F_(10,True), HEADL, LEF, B_ALL)
+put(ws,"C6", 6, F_(11,True,INPUTC), INPUTF, CEN, B_ALL); ws["C6"].number_format='0'
+put(ws,"D5","← 보고 싶은 연/월로 바꾸세요", F_(9,False,GRAY), align=LEF)
+
+# 목록 블록 (구성원/결제수단/유형/수입카테고리)
+put(ws,"B8","■ 목록 (드롭다운 항목)", F_(11,True,SECTION))
+hdr = [("B9","구성원"),("D9","결제수단"),("F9","유형"),("H9","수입 카테고리")]
+for coord,txt in hdr:
+    put(ws,coord,txt,F_(10,True,HEAD_TX),HEAD_BG,CEN,B_ALL)
+merge(ws,"D9:E9"); merge(ws,"H9:I9")
+# 행 10~17
+for i in range(8):
+    rr = 10+i
+    v_mem = members[i] if i < len(members) else None
+    v_pay = methods[i] if i < len(methods) else None
+    v_typ = types[i]   if i < len(types)   else None
+    v_inc = income_cats[i] if i < len(income_cats) else None
+    put(ws,f"B{rr}", v_mem, F_(10), WHITE if i%2 else ZEBRA, LEF, B_ALL)
+    merge(ws,f"D{rr}:E{rr}"); put(ws,f"D{rr}", v_pay, F_(10), WHITE if i%2 else ZEBRA, LEF, B_ALL); ws[f"E{rr}"].border=B_ALL
+    put(ws,f"F{rr}", v_typ, F_(10), WHITE if i%2 else ZEBRA, LEF, B_ALL)
+    merge(ws,f"H{rr}:I{rr}"); put(ws,f"H{rr}", v_inc, F_(10), WHITE if i%2 else ZEBRA, LEF, B_ALL); ws[f"I{rr}"].border=B_ALL
+
+# 지출 카테고리 & 예산
+EXP_HDR = 19
+put(ws,f"B{EXP_HDR}","■ 지출 카테고리 & 월 예산", F_(11,True,SECTION))
+put(ws,f"B{EXP_HDR+1}","대분류",   F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"C{EXP_HDR+1}","월 예산",  F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"D{EXP_HDR+1}","고정/변동",F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"E{EXP_HDR+1}","메모",     F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+exp_first = EXP_HDR+2
+for i,(name,kind,budget) in enumerate(expense_cats):
+    rr = exp_first+i
+    z = ZEBRA if i%2==0 else WHITE
+    put(ws,f"B{rr}", name,   F_(10), z, LEF, B_ALL)
+    put(ws,f"C{rr}", budget, F_(10,True,INPUTC), INPUTF, RIG, B_ALL, WON0)
+    put(ws,f"D{rr}", kind,   F_(10), z, CEN, B_ALL)
+    put(ws,f"E{rr}", "",     F_(10), z, LEF, B_ALL)
+exp_last = exp_first+len(expense_cats)-1
+# 예산 합계
+tot_r = exp_last+1
+put(ws,f"B{tot_r}","월 예산 합계", F_(10,True,HEAD_TX), NAVY, LEF, B_ALL)
+put(ws,f"C{tot_r}", f"=SUM(C{exp_first}:C{exp_last})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON0)
+put(ws,f"D{tot_r}","", fill=NAVY, border=B_ALL); put(ws,f"E{tot_r}","", fill=NAVY, border=B_ALL)
+
+# 범위 문자열 (드롭다운/조회용)
+MEM_RNG = f"{S_SET}!$B$10:$B$17"
+PAY_RNG = f"{S_SET}!$D$10:$D$17"
+TYP_RNG = f"{S_SET}!$F$10:$F$12"
+INC_RNG = f"{S_SET}!$H$10:$I$17"        # 표시용
+INC_LIST= f"{S_SET}!$H$10:$H$17"
+EXP_RNG = f"{S_SET}!$B${exp_first}:$B${exp_last}"
+BUD_RNG = f"{S_SET}!$C${exp_first}:$C${exp_last}"
+KIND_RNG= f"{S_SET}!$D${exp_first}:$D${exp_last}"
+CATTBL  = f"{S_SET}!$B${exp_first}:$D${exp_last}"   # VLOOKUP table (대분류,예산,구분)
+ALLCAT_RNG = f"{S_SET}!$B$10:$B$17,{S_SET}!$H$10:$H$17"  # not used directly
+
+# 기준 연/월 절대참조
+YR = f"{S_SET}!$C$5"
+MO = f"{S_SET}!$C$6"
+
+#######################################################################
+# 2) 거래내역 시트
+#######################################################################
+ws = ws_led
+ws.sheet_view.showGridLines = False
+ws.freeze_panes = "A2"
+headers = ["날짜","유형","대분류","소분류(상세)","구성원","결제수단","금액(원)","메모",
+           "연","월","주차","분기","연-월"]
+widths  = [13, 8, 14, 16, 9, 14, 14, 22, 6, 6, 6, 6, 9]
+for i,(h,w) in enumerate(zip(headers,widths)):
+    col = get_column_letter(i+1)
+    ws.column_dimensions[col].width = w
+    put(ws, f"{col}1", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+ws.row_dimensions[1].height = 24
+# 헬퍼 열(I~M) 헤더는 회색 톤
+for col in ["I","J","K","L","M"]:
+    ws[f"{col}1"].fill = PatternFill("solid", fgColor=GRAY)
+
+# 헬퍼 수식 + 서식 (전 행)
+for rr in range(r1, r2+1):
+    a = f"$A{rr}"
+    ws[f"I{rr}"] = f'=IF({a}="","",YEAR({a}))'
+    ws[f"J{rr}"] = f'=IF({a}="","",MONTH({a}))'
+    ws[f"K{rr}"] = f'=IF({a}="","",WEEKNUM({a},2))'
+    ws[f"L{rr}"] = f'=IF({a}="","",ROUNDUP(MONTH({a})/3,0))'
+    ws[f"M{rr}"] = f'=IF({a}="","",TEXT({a},"YYYY-MM"))'
+    ws[f"A{rr}"].number_format = DATEF
+    ws[f"G{rr}"].number_format = WON
+    for ci,col in enumerate(["A","B","C","D","E","F","G","H"]):
+        ws[f"{col}{rr}"].font = F_(10)
+        ws[f"{col}{rr}"].border = B_ALL
+        ws[f"{col}{rr}"].alignment = CEN if col in ("A","B","E","F") else (RIG if col=="G" else LEF)
+        ws[f"{col}{rr}"].protection = Protection(locked=False)
+    for col in ["I","J","K","L","M"]:
+        ws[f"{col}{rr}"].font = F_(9,False,GRAY)
+        ws[f"{col}{rr}"].alignment = CEN
+    for col in ["I","J","K","L"]:
+        ws[f"{col}{rr}"].number_format = '0'
+
+# 데이터 검증 (드롭다운)
+dv_typ = DataValidation(type="list", formula1=f'"{",".join(types)}"', allow_blank=True)
+dv_mem = DataValidation(type="list", formula1=MEM_RNG, allow_blank=True)
+dv_pay = DataValidation(type="list", formula1=PAY_RNG, allow_blank=True)
+dv_cat = DataValidation(type="list",
+    formula1=f"{S_SET}!$B$10:$B$17",  # placeholder; replaced below
+    allow_blank=True)
+# 대분류는 지출+수입+'이체' 포함 위해 별도 통합 목록을 설정 시트에 만든다
+ws_set_extra_col = "K"
+put(ws_set,"K9","대분류(통합)", F_(10,True,HEAD_TX), "95A5A6", CEN, B_ALL)
+allcats = [c[0] for c in expense_cats] + income_cats + ["이체/계좌이동"]
+for i,name in enumerate(allcats):
+    put(ws_set, f"K{10+i}", name, F_(9), ZEBRA if i%2==0 else WHITE, LEF, B_ALL)
+ALLCAT_RNG = f"{S_SET}!$K$10:$K${10+len(allcats)-1}"
+dv_cat = DataValidation(type="list", formula1=ALLCAT_RNG, allow_blank=True)
+
+for dv in (dv_typ, dv_mem, dv_pay, dv_cat):
+    ws.add_data_validation(dv)
+dv_typ.add(f"B{r1}:B{r2}")
+dv_cat.add(f"C{r1}:C{r2}")
+dv_mem.add(f"E{r1}:E{r2}")
+dv_pay.add(f"F{r1}:F{r2}")
+
+# 샘플 데이터
+def d(day, mon=6, yr=2026): return dt.date(yr, mon, day)
+sample = [
+    # 날짜, 유형, 대분류, 소분류, 구성원, 결제수단, 금액, 메모
+    # ===== 6월(기준월) — 저축률 ~28%, 외식·의류 예산 초과 시나리오 =====
+    (d(25), "수입","급여","6월 급여","본인","계좌이체",2800000,""),
+    (d(25), "수입","급여","6월 급여","배우자","계좌이체",2000000,""),
+    (d(5),  "지출","주거/관리비","관리비+월세","공동","신용카드",550000,""),
+    (d(10), "지출","통신/구독","휴대폰+넷플릭스","공동","신용카드",92000,""),
+    (d(15), "지출","보험","실손+종신","공동","계좌이체",300000,""),
+    (d(5),  "지출","교육/육아","학원비","자녀","계좌이체",450000,""),
+    (d(25), "지출","저축/투자","적금 자동이체","공동","계좌이체",500000,"비상금"),
+    (d(2),  "지출","식비/장보기","마트 장보기","본인","체크카드",150000,""),
+    (d(8),  "지출","식비/장보기","마트+정육점","배우자","체크카드",160000,""),
+    (d(15), "지출","식비/장보기","장보기","본인","체크카드",140000,""),
+    (d(22), "지출","식비/장보기","마트","배우자","체크카드",130000,""),
+    (d(3),  "지출","외식/배달/카페","치킨 배달","공동","간편결제(페이)",40000,""),
+    (d(7),  "지출","외식/배달/카페","주말 외식","공동","신용카드",60000,""),
+    (d(13), "지출","외식/배달/카페","카페","본인","간편결제(페이)",30000,""),
+    (d(18), "지출","외식/배달/카페","가족 회식","공동","신용카드",130000,"예산 초과 주의"),
+    (d(20), "지출","외식/배달/카페","가족 외식","공동","신용카드",110000,""),
+    (d(27), "지출","외식/배달/카페","배달","배우자","간편결제(페이)",80000,""),
+    (d(1),  "지출","교통/차량","주유+하이패스","본인","신용카드",130000,""),
+    (d(14), "지출","교통/차량","대중교통 충전","배우자","간편결제(페이)",100000,""),
+    (d(11), "지출","의료/건강","소아과+약국","자녀","체크카드",90000,""),
+    (d(21), "지출","문화/여가","영화+나들이","공동","신용카드",180000,""),
+    (d(9),  "지출","의류/미용","여름옷","배우자","신용카드",140000,""),
+    (d(24), "지출","의류/미용","미용실","본인","체크카드",70000,"예산 초과 주의"),
+    (d(6),  "지출","생활/소모품","세제+휴지","본인","체크카드",70000,""),
+    (d(18), "지출","생활/소모품","주방용품","배우자","체크카드",60000,""),
+    (d(16), "지출","경조사/선물","결혼 축의금","본인","계좌이체",100000,""),
+    (d(19), "지출","기타","기타 잡비","공동","현금",80000,""),
+    # ===== 5월(전월 비교용, 6월보다 지출 적음) =====
+    (d(25,5),"수입","급여","5월 급여","본인","계좌이체",2800000,""),
+    (d(25,5),"수입","급여","5월 급여","배우자","계좌이체",2000000,""),
+    (d(5,5), "지출","주거/관리비","관리비+월세","공동","신용카드",550000,""),
+    (d(10,5),"지출","통신/구독","통신+구독","공동","신용카드",92000,""),
+    (d(15,5),"지출","보험","보험료","공동","계좌이체",300000,""),
+    (d(5,5), "지출","교육/육아","학원비","자녀","계좌이체",450000,""),
+    (d(25,5),"지출","저축/투자","적금","공동","계좌이체",500000,""),
+    (d(12,5),"지출","식비/장보기","장보기 합계","본인","체크카드",520000,""),
+    (d(14,5),"지출","외식/배달/카페","외식+배달","공동","신용카드",300000,""),
+    (d(8,5), "지출","교통/차량","주유+교통","본인","신용카드",200000,""),
+    (d(20,5),"지출","문화/여가","여가","공동","신용카드",150000,""),
+    (d(9,5), "지출","의류/미용","의류","배우자","신용카드",130000,""),
+    (d(17,5),"지출","의료/건강","병원","자녀","체크카드",60000,""),
+    (d(11,5),"지출","생활/소모품","생필품","본인","체크카드",110000,""),
+    (d(22,5),"지출","경조사/선물","선물","본인","신용카드",50000,""),
+    (d(19,5),"지출","기타","기타 잡비","공동","현금",60000,""),
+]
+for i,row in enumerate(sample):
+    rr = r1+i
+    for ci,val in enumerate(row):
+        ws.cell(row=rr, column=ci+1, value=val)
+
+# 자동 필터 + 수입/지출/이체 행 색 구분
+ws.auto_filter.ref = f"A1:M{r2}"
+ws.conditional_formatting.add(f"A{r1}:H{r2}",
+    FormulaRule(formula=[f'$B{r1}="수입"'], fill=PatternFill("solid", fgColor="E8F5E9")))
+ws.conditional_formatting.add(f"A{r1}:H{r2}",
+    FormulaRule(formula=[f'$B{r1}="이체"'], fill=PatternFill("solid", fgColor="EFEFEF")))
+
+#######################################################################
+# 3) 대시보드 시트
+#######################################################################
+ws = ws_dash
+ws.sheet_view.showGridLines = False
+widths = {"A":2.5,"B":17,"C":14,"D":14,"E":12,"F":2.5,"G":15,"H":13,"I":13,"J":11,"K":2.5,"L":13,"M":13}
+for c,w in widths.items(): ws.column_dimensions[c].width = w
+
+merge(ws,"B1:J1")
+put(ws,"B1","📊  월간 대시보드", F_(23,True,HEAD_TX), NAVY, LEF)
+ws.row_dimensions[1].height = 44
+merge(ws,"B2:J2")
+put(ws,"B2", f'=TEXT({YR},"0")&"년 "&TEXT({MO},"0")&"월 가계 요약   ·   기준 기간은 [설정] 시트에서 변경"',
+    F_(11,True,GRAY), align=LEF)
+
+# 기준 셀(참조 단축용)
+put(ws,"M1","기준연", F_(8,False,GRAY), align=CEN)
+put(ws,"M2","기준월", F_(8,False,GRAY), align=CEN)
+put(ws,"L1", f"={YR}", F_(10,True), align=CEN); ws["L1"].number_format='0'
+put(ws,"L2", f"={MO}", F_(10,True), align=CEN); ws["L2"].number_format='0'
+yC, mC = "$L$1", "$L$2"
+
+def sif(typ=None, cat=None, yr=yC, mo=mC, member=None, kind=None):
+    parts = [G_]
+    if yr:  parts += [I_, yr]
+    if mo:  parts += [J_, mo]
+    if typ is not None: parts += [B_, f'"{typ}"']
+    if cat is not None: parts += [C_, f'"{cat}"']
+    if member is not None: parts += [E_, f'"{member}"']
+    return "=SUMIFS(" + ",".join(parts) + ")"
+
+# 기본 집계 셀 (숨은 영역 L4~L10)
+put(ws,"M4","[자동계산]", F_(8,False,GRAY))
+calc = {
+    "income":  sif(typ="수입"),
+    "expense": sif(typ="지출"),
+    "savecat": sif(typ="지출", cat="저축/투자"),
+}
+put(ws,"L4", calc["income"]);  put(ws,"M5","총수입", F_(8,False,GRAY))
+put(ws,"L5", calc["expense"]);
+put(ws,"L6", calc["savecat"]);
+put(ws,"L7", "=L4-L5")                      # 순잔액
+put(ws,"L8", "=L5-L6")                      # 소비지출(저축제외)
+put(ws,"L9", f"=IFERROR((L4-L8)/L4,0)")     # 저축률
+put(ws,"L10", f"=SUMIFS({BUD_RNG},{BUD_RNG},\"<>\")")  # 예산합 (단순합 대체)
+ws["L10"] = f"={S_SET}!$C${tot_r}"
+for rr in range(4,11): ws[f"L{rr}"].number_format = WON; ws[f"L{rr}"].font=F_(9,False,GRAY)
+ws["L9"].number_format = PCT
+
+from openpyxl.utils import column_index_from_string
+# KPI 카드 (모던: 틴트 배경 + 상단 액센트선 + 큰 값, 좌측 정렬)
+cards = [
+    ("B","총 수입","=L4", INCOME, T_INCOME, WON),
+    ("D","총 지출","=L5", EXPENSE, T_EXPENSE, WON),
+    ("G","소비지출","=L8", AMBER, T_AMBER, WON),
+    ("B","저축·투자","=L6", SAVE, T_SAVE, WON, 7),
+    ("D","순잔액 (수입−지출)","=L7", SLATE, T_INK, WON, 7),
+    ("G","저축률","=L9", VIOLET, T_VIOLET, PCT, 7),
+]
+def card(col_letter, label, ref, color, tint, fmt, rowtop=4):
+    ci = column_index_from_string(col_letter)
+    c1 = col_letter; c2 = get_column_letter(ci+1)
+    merge(ws, f"{c1}{rowtop}:{c2}{rowtop}")
+    merge(ws, f"{c1}{rowtop+1}:{c2}{rowtop+1}")
+    al = Alignment(horizontal="left", vertical="center", indent=1)
+    put(ws, f"{c1}{rowtop}", label, F_(10,True,GRAY), tint, al)
+    put(ws, f"{c1}{rowtop+1}", ref, F_(21,True,color), tint, al, fmt=fmt)
+    acc = Side(style="thick", color=color)
+    for cc in (c1,c2):
+        ws[f"{cc}{rowtop}"].border = Border(top=acc)
+        ws[f"{cc}{rowtop+1}"].fill = PatternFill("solid", fgColor=tint)
+    ws.row_dimensions[rowtop].height = 24
+    ws.row_dimensions[rowtop+1].height = 44
+
+for c in cards:
+    if len(c)==7: card(c[0],c[1],c[2],c[3],c[4],c[5],c[6])
+    else: card(c[0],c[1],c[2],c[3],c[4],c[5])
+
+# 전월 대비
+prev_inc = f"=SUMIFS({G_},{I_},{yC},{J_},{mC}-1,{B_},\"수입\")"
+prev_exp = f"=SUMIFS({G_},{I_},{yC},{J_},{mC}-1,{B_},\"지출\")"
+put(ws,"M7", prev_exp, F_(9,False,GRAY)); ws["M7"].number_format=WON   # 전월 지출 보조
+merge(ws,"B10:J10")
+put(ws,"B10", f'="전월 대비 지출: "&TEXT(L5-M7,"+₩#,##0;-₩#,##0")&"  ("&TEXT(IFERROR((L5-M7)/M7,0),"+0.0%;-0.0%")&")"',
+    F_(10,True), LIGHT, LEF)
+ws["B10"].border=B_ALL
+for cc in "CDEFGHIJ": ws[f"{cc}10"].fill=PatternFill("solid",fgColor=LIGHT); ws[f"{cc}10"].border=B_ALL
+
+# 카테고리별 소비 표
+TBL = 13
+put(ws,f"B{TBL-1}","■ 카테고리별 지출 · 예산 대비", F_(12,True,SECTION))
+heads = ["대분류","지출액","예산","집행률"]
+for i,h in enumerate(heads):
+    put(ws, f"{get_column_letter(2+i)}{TBL}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+cat_first = TBL+1
+for i,(name,kind,bud) in enumerate(expense_cats):
+    rr = cat_first+i
+    z = ZEBRA if i%2==0 else WHITE
+    put(ws, f"B{rr}", name, F_(10), z, LEF, B_ALL)
+    put(ws, f"C{rr}", f'=SUMIFS({G_},{I_},{yC},{J_},{mC},{B_},"지출",{C_},B{rr})',
+        F_(10), z, RIG, B_ALL, WON)
+    put(ws, f"D{rr}", f'=IFERROR(VLOOKUP(B{rr},{CATTBL},2,0),0)', F_(10), z, RIG, B_ALL, WON)
+    put(ws, f"E{rr}", f'=IFERROR(C{rr}/D{rr},0)', F_(10), z, CEN, B_ALL, PCT)
+cat_last = cat_first+len(expense_cats)-1
+# 합계행
+sr = cat_last+1
+put(ws,f"B{sr}","합계", F_(10,True,HEAD_TX), NAVY, LEF, B_ALL)
+put(ws,f"C{sr}", f"=SUM(C{cat_first}:C{cat_last})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON)
+put(ws,f"D{sr}", f"=SUM(D{cat_first}:D{cat_last})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON)
+put(ws,f"E{sr}", f"=IFERROR(C{sr}/D{sr},0)", F_(10,True,HEAD_TX), NAVY, CEN, B_ALL, PCT)
+# 집행률 데이터바 + 초과 빨강
+ws.conditional_formatting.add(f"E{cat_first}:E{cat_last}",
+    DataBarRule(start_type="num", start_value=0, end_type="num", end_value=1.2,
+                color=AMBER, showValue=True))
+ws.conditional_formatting.add(f"E{cat_first}:E{cat_last}",
+    CellIsRule(operator="greaterThan", formula=["1"], fill=PatternFill("solid",fgColor="F8CBAD"),
+               font=Font(name=F, color="C00000", bold=True)))
+
+# 구성원별 지출 표 (차트용)
+MB = TBL
+put(ws,f"G{MB-1}","■ 구성원별 지출", F_(12,True,SECTION))
+put(ws,f"G{MB}","구성원", F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"H{MB}","지출액", F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+for i,m in enumerate(members):
+    rr=MB+1+i; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"G{rr}", m, F_(10), z, LEF, B_ALL)
+    put(ws,f"H{rr}", f'=SUMIFS({G_},{I_},{yC},{J_},{mC},{B_},"지출",{E_},G{rr})', F_(10), z, RIG, B_ALL, WON)
+mem_first=MB+1; mem_last=MB+len(members)
+
+# 주차별 추이 표 (최근 8주, 차트용)
+WK = MB+len(members)+3
+put(ws,f"G{WK-1}","■ 주차별 지출 추이(최근 8주)", F_(12,True,SECTION))
+put(ws,f"G{WK}","주차", F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"H{WK}","지출액", F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"I{WK}","주번호", F_(9,False,GRAY), align=CEN)
+basewk = f'WEEKNUM(DATE({yC},{mC},28),2)'
+for i in range(8):
+    rr=WK+1+i; z=ZEBRA if i%2==0 else WHITE
+    off = i-7
+    put(ws,f"I{rr}", f'=MAX(1,{basewk}+{off})', F_(9,False,GRAY), align=CEN)
+    put(ws,f"G{rr}", f'="W"&TEXT(I{rr},"00")', F_(10), z, CEN, B_ALL)
+    put(ws,f"H{rr}", f'=SUMIFS({G_},{I_},{yC},{K_},I{rr},{B_},"지출")', F_(10), z, RIG, B_ALL, WON)
+wk_first=WK+1; wk_last=WK+8
+
+# ---- 차트: 카테고리 막대 ----
+ch1 = BarChart(); ch1.type="bar"; ch1.title="카테고리별 지출 (이번 달)"
+ch1.height=11.5; ch1.width=13
+data = Reference(ws, min_col=3, min_row=TBL, max_row=cat_last)   # C: 지출액(헤더 포함)
+cats = Reference(ws, min_col=2, min_row=cat_first, max_row=cat_last)
+ch1.add_data(data, titles_from_data=True); ch1.set_categories(cats)
+ch1.legend=None
+ch1.x_axis.delete=False; ch1.y_axis.delete=False
+ch1.y_axis.numFmt='#,##0'
+_cat_colors = ["F2C14E","7C9885","CC8B96","7E9BBE","9787BE","E0A21E",
+               "8FBF9F","E8A87C","B5A8D1","8CB8C4","C9A66B","D49AA6","9DB17C","B0A18F"]
+ch1.varyColors = True
+_dps1 = []
+for _i in range(len(expense_cats)):
+    _dp = DataPoint(idx=_i)
+    _dp.graphicalProperties = GraphicalProperties(solidFill=_cat_colors[_i % len(_cat_colors)])
+    _dps1.append(_dp)
+ch1.series[0].data_points = _dps1
+ws.add_chart(ch1, f"B{sr+2}")
+
+# ---- 차트: 구성원 파이 ----
+ch2 = PieChart(); ch2.title="구성원별 지출 비중"; ch2.height=7.5; ch2.width=8
+d2 = Reference(ws, min_col=8, min_row=MB, max_row=mem_last)
+c2 = Reference(ws, min_col=7, min_row=mem_first, max_row=mem_last)
+ch2.add_data(d2, titles_from_data=True); ch2.set_categories(c2)
+ch2.dataLabels = DataLabelList()
+ch2.dataLabels.showPercent=True; ch2.dataLabels.showCatName=True
+ch2.dataLabels.showVal=False; ch2.dataLabels.showSerName=False; ch2.dataLabels.showLegendKey=False
+ch2.legend = None
+_pie = ["FFC72C","7E9BBE","7C9885","CC8B96"]
+_dps = []
+for _i in range(len(members)):
+    _dp = DataPoint(idx=_i); _dp.graphicalProperties = GraphicalProperties(solidFill=_pie[_i % len(_pie)])
+    _dps.append(_dp)
+ch2.series[0].data_points = _dps
+ws.add_chart(ch2, f"G{sr+2}")
+
+# ---- 차트: 주차 라인 ----
+ch3 = LineChart(); ch3.title="주차별 지출 추이"; ch3.height=7.5; ch3.width=10
+d3 = Reference(ws, min_col=8, min_row=WK, max_row=wk_last)
+c3 = Reference(ws, min_col=7, min_row=wk_first, max_row=wk_last)
+ch3.add_data(d3, titles_from_data=True); ch3.set_categories(c3)
+ch3.legend=None
+ch3.x_axis.delete=False; ch3.y_axis.delete=False
+ch3.y_axis.numFmt='#,##0'
+_gp = GraphicalProperties(); _gp.line = LineProperties(solidFill=TEAL, w=26000)
+ch3.series[0].graphicalProperties = _gp
+ch3.series[0].smooth = False
+ws.add_chart(ch3, f"G{sr+18}")
+for _c in ["L","M","N"]:
+    ws.column_dimensions[_c].hidden = True
+
+#######################################################################
+# 4) 기간리포트 시트
+#######################################################################
+ws = ws_rep
+ws.sheet_view.showGridLines = False
+for c,w in {"A":2.5,"B":14,"C":14,"D":14,"E":14,"F":11,"G":2.5,
+            "H":12,"I":14,"J":14,"K":11}.items():
+    ws.column_dimensions[c].width=w
+merge(ws,"B1:K1")
+put(ws,"B1","📈  기간별 리포트  (주간 · 월간 · 분기 · 연간)", F_(20,True,HEAD_TX), NAVY, LEF)
+ws.row_dimensions[1].height=42
+put(ws,"L1", f"={YR}", font=F_(10)); ws["L1"].number_format='0'
+put(ws,"L2", f"={MO}", font=F_(10)); ws["L2"].number_format='0'
+yR, mR = "$L$1","$L$2"
+
+def block_header(r, c_start, title):
+    put(ws,f"{c_start}{r}", title, F_(12,True,SECTION))
+
+# --- 월간(1~12월) ---
+block_header(2,"B","■ 월간 추이 (기준 연도)")
+mh=3
+for i,h in enumerate(["월","수입","소비지출","순잔액","저축률"]):
+    put(ws,f"{get_column_letter(2+i)}{mh}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+mf=mh+1
+for i in range(12):
+    rr=mf+i; mn=i+1; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"B{rr}", f'{mn}월', F_(10), z, CEN, B_ALL)
+    put(ws,f"C{rr}", f'=SUMIFS({G_},{I_},{yR},{J_},{mn},{B_},"수입")', F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"D{rr}", f'=SUMIFS({G_},{I_},{yR},{J_},{mn},{B_},"지출")-SUMIFS({G_},{I_},{yR},{J_},{mn},{B_},"지출",{C_},"저축/투자")',
+        F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"E{rr}", f'=C{rr}-SUMIFS({G_},{I_},{yR},{J_},{mn},{B_},"지출")', F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"F{rr}", f'=IFERROR((C{rr}-D{rr})/C{rr},0)', F_(10), z, CEN, B_ALL, PCT)
+ml=mf+11
+put(ws,f"B{ml+1}","연간 합계", F_(10,True,HEAD_TX), NAVY, CEN, B_ALL)
+put(ws,f"C{ml+1}", f"=SUM(C{mf}:C{ml})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON)
+put(ws,f"D{ml+1}", f"=SUM(D{mf}:D{ml})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON)
+put(ws,f"E{ml+1}", f"=SUM(E{mf}:E{ml})", F_(10,True,HEAD_TX), NAVY, RIG, B_ALL, WON)
+put(ws,f"F{ml+1}", f"=IFERROR((C{ml+1}-D{ml+1})/C{ml+1},0)", F_(10,True,HEAD_TX), NAVY, CEN, B_ALL, PCT)
+
+# --- 분기 ---
+block_header(2,"H","■ 분기 요약")
+qh=3
+for i,h in enumerate(["분기","수입","소비지출","저축률"]):
+    put(ws,f"{get_column_letter(8+i)}{qh}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+qf=qh+1
+for i in range(4):
+    rr=qf+i; q=i+1; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"H{rr}", f'Q{q}', F_(10), z, CEN, B_ALL)
+    put(ws,f"I{rr}", f'=SUMIFS({G_},{I_},{yR},{Lq},{q},{B_},"수입")', F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"J{rr}", f'=SUMIFS({G_},{I_},{yR},{Lq},{q},{B_},"지출")-SUMIFS({G_},{I_},{yR},{Lq},{q},{B_},"지출",{C_},"저축/투자")',
+        F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"K{rr}", f'=IFERROR((I{rr}-J{rr})/I{rr},0)', F_(10), z, CEN, B_ALL, PCT)
+ql=qf+3
+
+# --- 주간(최근 12주) ---
+WKR = ql+3
+block_header(WKR-1,"H","■ 주간 요약 (기준일 기준 최근 12주)")
+for i,h in enumerate(["주차","수입","지출","순잔액"]):
+    put(ws,f"{get_column_letter(8+i)}{WKR}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+put(ws,f"L{WKR}","주번호", F_(9,False,GRAY), align=CEN)
+wf=WKR+1
+basewkR=f'WEEKNUM(DATE({yR},{mR},28),2)'
+for i in range(12):
+    rr=wf+i; off=i-11; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"L{rr}", f'=MAX(1,{basewkR}+{off})', F_(9,False,GRAY), align=CEN)
+    put(ws,f"H{rr}", f'="W"&TEXT(L{rr},"00")', F_(10), z, CEN, B_ALL)
+    put(ws,f"I{rr}", f'=SUMIFS({G_},{I_},{yR},{K_},L{rr},{B_},"수입")', F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"J{rr}", f'=SUMIFS({G_},{I_},{yR},{K_},L{rr},{B_},"지출")', F_(10), z, RIG, B_ALL, WON)
+    put(ws,f"K{rr}", f'=I{rr}-J{rr}', F_(10), z, RIG, B_ALL, WON)
+wl=wf+11
+
+# --- 연간 요약 카드 ---
+block_header(2, "B", "")  # spacer
+AN = ml+4
+block_header(AN-1,"B","■ 연간 요약")
+ann = [("연 수입", f"=C{ml+1}", INCOME),
+       ("연 지출(전체)", f'=SUMIFS({G_},{I_},{yR},{B_},"지출")', EXPENSE),
+       ("연 순잔액", f"=E{ml+1}", SLATE),
+       ("연 저축률", f"=F{ml+1}", VIOLET)]
+for i,(lab,ref,col) in enumerate(ann):
+    cc=get_column_letter(2+i)
+    put(ws,f"{cc}{AN}", lab, F_(9,True,HEAD_TX), col, CEN, B_ALL)
+    put(ws,f"{cc}{AN+1}", ref, F_(12,True,col), CARD, CEN, B_ALL, WON if i<3 else PCT)
+    ws.row_dimensions[AN+1].height=26
+
+# 차트: 월간 수입/지출
+chm = BarChart(); chm.type="col"; chm.title="월별 수입 vs 소비지출"
+chm.height=7.5; chm.width=14
+dd = Reference(ws, min_col=3, max_col=4, min_row=mh, max_row=ml)
+cc = Reference(ws, min_col=2, min_row=mf, max_row=ml)
+chm.add_data(dd, titles_from_data=True); chm.set_categories(cc)
+chm.x_axis.delete=False; chm.y_axis.delete=False
+chm.y_axis.numFmt='#,##0'
+chm.series[0].graphicalProperties = GraphicalProperties(solidFill=INCOME)
+chm.series[1].graphicalProperties = GraphicalProperties(solidFill=EXPENSE)
+ws.add_chart(chm, f"B{AN+3}")
+
+# 차트: 분기
+chq = BarChart(); chq.type="col"; chq.title="분기별 수입 vs 소비지출"
+chq.height=7.5; chq.width=10
+dq = Reference(ws, min_col=9, max_col=10, min_row=qh, max_row=ql)
+cq = Reference(ws, min_col=8, min_row=qf, max_row=ql)
+chq.add_data(dq, titles_from_data=True); chq.set_categories(cq)
+chq.x_axis.delete=False; chq.y_axis.delete=False
+chq.y_axis.numFmt='#,##0'
+chq.series[0].graphicalProperties = GraphicalProperties(solidFill=INCOME)
+chq.series[1].graphicalProperties = GraphicalProperties(solidFill=EXPENSE)
+ws.add_chart(chq, f"H{wl+2}")
+ws.column_dimensions["L"].hidden = True
+
+#######################################################################
+# 5) 진단 & 인사이트 시트
+#######################################################################
+ws = ws_ins
+ws.sheet_view.showGridLines = False
+for c,w in {"A":2.5,"B":20,"C":10,"D":46,"E":46}.items():
+    ws.column_dimensions[c].width=w
+merge(ws,"B1:E1")
+put(ws,"B1","🔍  진단 & 인사이트  —  이번 달 살림 자동 분석", F_(20,True,HEAD_TX), NAVY, LEF)
+ws.row_dimensions[1].height=42
+merge(ws,"B2:E2")
+put(ws,"B2", f'=TEXT({YR},"0")&"년 "&TEXT({MO},"0")&"월 기준 · [설정]에서 기간 변경 시 자동 갱신"',
+    F_(10,True,"B9770D"), align=LEF)
+
+# 보조 계산 (대시보드 셀 참조)
+D = f"{S_DASH}!"
+put(ws,"B4","■ 핵심 지표", F_(12,True,SECTION))
+metrics = [
+    ("총수입", f"={D}$L$4", WON),
+    ("소비지출(저축 제외)", f"={D}$L$8", WON),
+    ("저축·투자", f"={D}$L$6", WON),
+    ("저축률", f"={D}$L$9", PCT),
+    ("예산 집행률(총지출÷예산)", f"={S_DASH}!$E${sr}", PCT),
+]
+mh2=5
+for i,h in enumerate(["지표","값"]):
+    put(ws,f"{get_column_letter(2+i)}{mh2}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+for i,(lab,ref,fmt) in enumerate(metrics):
+    rr=mh2+1+i; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"B{rr}", lab, F_(10), z, LEF, B_ALL)
+    put(ws,f"C{rr}", ref, F_(10,True), z, CEN, B_ALL, fmt)
+
+# 보조: 외식, 고정/변동
+put(ws,"G5","[보조계산]", F_(8,False,GRAY))
+put(ws,"G6", f'=SUMIFS({G_},{I_},{D}$L$1,{J_},{D}$L$2,{B_},"지출",{C_},"외식/배달/카페")'); ws["G6"].number_format=WON  # 외식
+put(ws,"G7", f'=SUMIF({KIND_RNG},"고정",{S_DASH}!$C${cat_first}:$C${cat_last})'); ws["G7"].number_format=WON  # 고정비
+put(ws,"G8", f'=SUMIF({KIND_RNG},"변동",{S_DASH}!$C${cat_first}:$C${cat_last})'); ws["G8"].number_format=WON  # 변동비
+put(ws,"G9", f'=COUNTIFS({S_DASH}!$E${cat_first}:$E${cat_last},">1")'); ws["G9"].number_format='0'  # 예산초과 카테고리 수
+# 최대 지출 카테고리
+put(ws,"G10", f'=INDEX({S_DASH}!$B${cat_first}:$B${cat_last},MATCH(MAX({S_DASH}!$C${cat_first}:$C${cat_last}),{S_DASH}!$C${cat_first}:$C${cat_last},0))')
+put(ws,"G11", f'=MAX({S_DASH}!$C${cat_first}:$C${cat_last})'); ws["G11"].number_format=WON
+
+# 진단 표
+put(ws,"B12","■ 자동 진단 (🟢 잘하고 있어요 / 🟡 관심 / 🔴 개선 필요)", F_(12,True,SECTION))
+dh=13
+for i,h in enumerate(["항목","상태","진단","제안"]):
+    put(ws,f"{get_column_letter(2+i)}{dh}", h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+
+sr_rate = f"{D}$L$9"   # 저축률
+exec_r  = f"{S_DASH}!$E${sr}"  # 집행률(총지출÷예산, 대시보드 합계행)
+df=dh+1
+diagnoses = [
+    # 항목, 상태수식, 진단수식, 제안수식
+    ("저축률",
+     f'=IF({sr_rate}>=0.2,"🟢 우수",IF({sr_rate}>=0.1,"🟡 관심","🔴 주의"))',
+     f'="번 돈의 "&TEXT({sr_rate},"0.0%")&"를 모으고 있어요."',
+     f'=IF({sr_rate}>=0.2,"권장선(20%)을 넘는 훌륭한 저축률입니다. 이 페이스를 유지하세요.",IF({sr_rate}>=0.1,"양호합니다. 고정비를 한 단계 줄여 20%를 목표로 해보세요.","지출보다 저축이 적습니다. 고정비·변동비를 함께 점검해 10%부터 만들어요."))'),
+    ("예산 집행률",
+     f'=IF({exec_r}<=1,"🟢 우수",IF({exec_r}<=1.1,"🟡 관심","🔴 주의"))',
+     f'="소비지출이 예산의 "&TEXT({exec_r},"0.0%")&" 수준이에요."',
+     f'=IF({exec_r}<=1,"예산 안에서 잘 운영 중입니다.","예산을 초과했습니다. 아래 초과 카테고리부터 조정해보세요.")'),
+    ("예산 초과 카테고리",
+     '=IF($G$9=0,"🟢 우수",IF($G$9<=2,"🟡 관심","🔴 주의"))',
+     '=IF($G$9=0,"예산을 넘긴 카테고리가 없습니다.",TEXT($G$9,"0")&"개 카테고리가 예산을 초과했어요.")',
+     '=IF($G$9=0,"전 카테고리가 계획 범위 안에 있습니다. 잘하고 있어요!","[대시보드]에서 빨갛게 표시된 항목을 우선 점검하세요.")'),
+    ("최대 지출 항목",
+     '="🟡 관심"',
+     f'=$G$10&" 에 가장 많이 썼어요 ("&TEXT($G$11,"₩#,##0")&")."',
+     f'=IF($G$10="저축/투자","저축이 최대 지출입니다 — 매우 바람직한 형태예요!","이 항목이 전체 소비의 "&TEXT(IFERROR($G$11/{D}$L$8,0),"0.0%")&"를 차지합니다. 과도하면 1순위로 조정하세요.")'),
+    ("외식·배달 비중",
+     f'=IF(IFERROR($G$6/{D}$L$8,0)<=0.12,"🟢 우수",IF(IFERROR($G$6/{D}$L$8,0)<=0.2,"🟡 관심","🔴 주의"))',
+     f'="소비 중 외식·배달이 "&TEXT(IFERROR($G$6/{D}$L$8,0),"0.0%")&" 예요."',
+     f'=IF(IFERROR($G$6/{D}$L$8,0)<=0.12,"외식 지출이 안정적입니다.","외식·배달 빈도를 주 1회 줄이면 가장 빠르게 절약됩니다.")'),
+    ("고정비 비중(예산)",
+     f'=IF(IFERROR($G$7/($G$7+$G$8),0)<=0.5,"🟢 우수",IF(IFERROR($G$7/($G$7+$G$8),0)<=0.6,"🟡 관심","🔴 주의"))',
+     f'="예산상 고정비 비중이 "&TEXT(IFERROR($G$7/($G$7+$G$8),0),"0.0%")&" 입니다."',
+     '=IF(IFERROR($G$7/($G$7+$G$8),0)<=0.5,"고정비 비중이 건강합니다.","고정비(통신·구독·보험)를 1년에 한 번 갈아타기/해지로 점검하세요.")'),
+]
+for i,(item,stat,diag,sug) in enumerate(diagnoses):
+    rr=df+i; z=ZEBRA if i%2==0 else WHITE
+    put(ws,f"B{rr}", item, F_(10,True), z, LEF, B_ALL)
+    put(ws,f"C{rr}", stat, F_(13), z, CEN, B_ALL)
+    put(ws,f"D{rr}", diag, F_(10), z, LEFW, B_ALL)
+    put(ws,f"E{rr}", sug,  F_(10), z, LEFW, B_ALL)
+    ws.row_dimensions[rr].height=30
+dl=df+len(diagnoses)-1
+_st = f"C{df}:C{dl}"
+ws.conditional_formatting.add(_st, FormulaRule(formula=[f'ISNUMBER(SEARCH("우수",C{df}))'],
+    fill=PatternFill("solid",fgColor="C6EFCE"), font=Font(name=F,bold=True,color="006100")))
+ws.conditional_formatting.add(_st, FormulaRule(formula=[f'ISNUMBER(SEARCH("관심",C{df}))'],
+    fill=PatternFill("solid",fgColor="FFEB9C"), font=Font(name=F,bold=True,color="9C6500")))
+ws.conditional_formatting.add(_st, FormulaRule(formula=[f'ISNUMBER(SEARCH("주의",C{df}))'],
+    fill=PatternFill("solid",fgColor="FFC7CE"), font=Font(name=F,bold=True,color="9C0006")))
+
+# 요약 멘트
+sm=dl+2
+merge(ws,f"B{sm}:E{sm}")
+put(ws,f"B{sm}","■ 한 줄 요약", F_(12,True,SECTION))
+merge(ws,f"B{sm+1}:E{sm+2}")
+put(ws,f"B{sm+1}",
+    f'="이번 달 저축률은 "&TEXT({sr_rate},"0.0%")&", 예산 집행률은 "&TEXT({exec_r},"0.0%")&"입니다. "&IF({sr_rate}>=0.2,"저축 습관이 아주 좋아요. ",IF({sr_rate}>=0.1,"저축을 조금만 더 끌어올리면 좋아요. ","저축 여력 확보가 최우선입니다. "))&IF($G$9=0,"예산도 잘 지키고 있습니다.",TEXT($G$9,"0")&"개 카테고리만 조정하면 균형이 맞습니다.")',
+    F_(11,True,"7D6608"), "FCF3CF", LEFW)
+ws[f"B{sm+1}"].border=B_ALL
+
+# 정기지출 체크리스트 (고정비 누락 방지)
+_fixed = [c[0] for c in expense_cats if c[1]=="고정"]
+rc = sm+4
+put(ws,f"B{rc}","📌 이번 달 정기지출 체크 (고정비 누락 방지)", F_(12,True,SECTION))
+for _ci,_h in enumerate(["항목","월 예산","상태"]):
+    put(ws,f"{get_column_letter(2+_ci)}{rc+1}", _h, F_(10,True,HEAD_TX), HEAD_BG, CEN, B_ALL)
+for _i,_it in enumerate(_fixed):
+    _r = rc+2+_i; _z = ZEBRA if _i%2==0 else WHITE
+    put(ws,f"B{_r}", _it, F_(10), _z, LEF, B_ALL)
+    put(ws,f"C{_r}", f'=IFERROR(VLOOKUP(B{_r},{CATTBL},2,0),0)', F_(10), _z, RIG, B_ALL, WON)
+    put(ws,f"D{_r}", f'=IF(COUNTIFS({C_},B{_r},{I_},{D}$L$1,{J_},{D}$L$2)>0,"✅ 완료","⬜ 미입력")',
+        F_(10), _z, CEN, B_ALL)
+_dlast = rc+1+len(_fixed)
+ws.conditional_formatting.add(f"D{rc+2}:D{_dlast}",
+    FormulaRule(formula=[f'ISNUMBER(SEARCH("미입력",D{rc+2}))'],
+    fill=PatternFill("solid",fgColor="FBD5D5"), font=Font(name=F,color="C0392B",bold=True)))
+
+#######################################################################
+# 6) 시작하기 시트
+#######################################################################
+ws = ws_guide
+ws.sheet_view.showGridLines = False
+for c,w in {"A":2.5,"B":26,"C":60,"D":4}.items():
+    ws.column_dimensions[c].width=w
+merge(ws,"B1:C1")
+put(ws,"B1","🏠  우리집 가계부", F_(26,True,HEAD_TX), NAVY, LEF)
+ws.row_dimensions[1].height=52
+merge(ws,"B2:C2")
+put(ws,"B2","가족이 함께 쓰는 대시보드형 가계부 — 입력은 한 곳, 분석은 자동", F_(11,True,GRAY), align=LEF)
+
+def section(r, title):
+    merge(ws,f"B{r}:C{r}")
+    put(ws,f"B{r}", title, F_(12,True,HEAD_TX), HEAD_BG, LEF)
+    ws.row_dimensions[r].height=22
+
+def row2(r, a, b, fill=None):
+    put(ws,f"B{r}", a, F_(10,True), fill or WHITE, LEFW, B_ALL)
+    put(ws,f"C{r}", b, F_(10), fill or WHITE, LEFW, B_ALL)
+
+section(4,"📌 사용 순서 (딱 3단계)")
+row2(5,"① [설정] 시트","구성원·결제수단·카테고리별 월 예산을 우리 집에 맞게 채웁니다. 기준 연/월도 여기서 지정.", ZEBRA)
+row2(6,"② [거래내역] 시트","돈을 쓰거나 벌 때마다 한 줄씩 입력. 날짜·유형·대분류·금액만 넣어도 충분합니다.")
+row2(7,"③ [대시보드]·[기간리포트]·[진단&인사이트]","입력만 하면 자동으로 집계·차트·진단이 갱신됩니다. 직접 계산할 필요 없어요.", ZEBRA)
+
+section(9,"📑 시트 안내")
+row2(10,"⚙️ 설정","모든 기준값의 출발점. 여기 값만 바꾸면 전체가 연동됩니다.", ZEBRA)
+row2(11,"✍️ 거래내역","실제 입력 화면. 드롭다운으로 빠르게 기록.")
+row2(12,"📊 대시보드","이번 달 핵심 요약(KPI 카드 6개 + 카테고리/구성원/주차 차트).", ZEBRA)
+row2(13,"📈 기간리포트","주간·월간·분기·연간 표와 그래프.")
+row2(14,"🔍 진단&인사이트","잘하는 점/개선점을 자동 진단하고 절약 팁을 제안.", ZEBRA)
+
+section(16,"🖱️ 입력 팁")
+row2(17,"유형","수입 / 지출 / 이체 중 선택. '이체'는 계좌 간 이동 등 분석 제외 항목.", ZEBRA)
+row2(18,"대분류","드롭다운에서 선택. 카테고리는 [설정]에서 자유롭게 수정 가능.")
+row2(19,"저축/투자","적금·투자금도 '지출-저축/투자'로 기록하세요. 저축률에 반영됩니다.", ZEBRA)
+row2(20,"금액","숫자만 입력(원). 자동으로 ₩ 표기됩니다.")
+
+section(22,"🎨 색상 범례")
+put(ws,"B23","노랑 칸 + 파란 글씨", F_(10,True,INPUTC), INPUTF, CEN, B_ALL)
+put(ws,"C23","직접 입력하는 칸 (예산·기준연월 등)", F_(10), WHITE, LEFW, B_ALL)
+put(ws,"B24","그 외 검정 글씨", F_(10), WHITE, CEN, B_ALL)
+put(ws,"C24","자동 계산 결과 — 건드리지 않아도 됩니다.", F_(10), ZEBRA, LEFW, B_ALL)
+put(ws,"B25","🔴 빨강 강조", F_(10,True,"C00000"), WHITE, CEN, B_ALL)
+put(ws,"C25","예산 초과 등 주의가 필요한 항목.", F_(10), WHITE, LEFW, B_ALL)
+
+put(ws,"B27","TIP. 1년 이상 쓰려면 [거래내역]의 빈 행을 계속 이어서 입력하면 됩니다 (수식 자동 적용, 약 1,200건).",
+    F_(9,True,GRAY), align=LEFW)
+merge(ws,"B27:C27")
+
+# 시트 보호 (수식·서식 보호, 입력칸만 편집 가능)
+ws_led.protection.sheet = True
+ws_led.protection.autoFilter = False   # 필터 사용 허용
+ws_led.protection.sort = False         # 정렬 사용 허용
+for _ws in (ws_dash, ws_rep, ws_ins, ws_guide):
+    _ws.protection.sheet = True
+# 설정 시트(ws_set)는 사용자가 자유 수정해야 하므로 보호하지 않음
+
+wb.save(OUT)
+print("SAVED:", OUT)
