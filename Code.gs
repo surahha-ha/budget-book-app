@@ -45,7 +45,7 @@ var methods=['현금','체크카드','신용카드','계좌이체','간편결제
 var types=['수입','지출','이체'];
 
 // ---------- 거래내역 범위 상수 ----------
-var NROW=1200, R1=2, R2=NROW+1;
+var NROW=500, R1=2, R2=NROW+1;
 var S_GUIDE='시작하기', S_SET='설정', S_LED='거래내역', S_DASH='대시보드', S_REP='기간리포트', S_INS='진단&인사이트';
 function L(col){ return S_LED+'!$'+col+'$'+R1+':$'+col+'$'+R2; }
 var G_=L('G'), I_=L('I'), J_=L('J'), B_=L('B'), C_=L('C'), E_=L('E'), K_=L('K'), Lq=L('L');
@@ -68,13 +68,11 @@ function put(sh, a1, value, o){
     if(typeof value==='string' && value.charAt(0)==='=') r.setFormula(value);
     else r.setValue(value);
   }
-  r.setFontFamily(F);
   r.setFontSize(o.size||10);
   if(o.bold) r.setFontWeight('bold');
   r.setFontColor(o.color||INK);
   if(o.fill) r.setBackground(o.fill);
   r.setHorizontalAlignment(o.align||'left');
-  r.setVerticalAlignment('middle');
   if(o.wrap) r.setWrap(true);
   if(o.fmt) r.setNumberFormat(o.fmt);
   if(o.border) r.setBorder(null,null,true,null,null,null, LINE, SOLID);
@@ -103,6 +101,9 @@ function buildBudget(){
 
   // 기본 시트 제거
   ['Sheet1','시트1'].forEach(function(n){ var s=ss.getSheetByName(n); if(s) ss.deleteSheet(s); });
+
+  // 공통 폰트·세로정렬 일괄 적용 (성능: put에서 분리해 한 번에)
+  names.forEach(function(n){ sh[n].getDataRange().setFontFamily(F).setVerticalAlignment('middle'); });
 
   // 시트 보호 (입력칸만 편집 가능)
   protectSheet_(sh[S_LED], sh[S_LED].getRange('A2:H'+R2));
@@ -238,19 +239,13 @@ function buildLedger_(sh, ss){
   ];
   sh.getRange(2,1,sample.length,8).setValues(sample);
 
-  // 헬퍼 수식 (I~M, 전 행 배치)
-  var fml=[];
-  for(var rr=R1; rr<=R2; rr++){
-    var a='$A'+rr;
-    fml.push([
-      '=IF('+a+'="","",YEAR('+a+'))',
-      '=IF('+a+'="","",MONTH('+a+'))',
-      '=IF('+a+'="","",WEEKNUM('+a+',2))',
-      '=IF('+a+'="","",ROUNDUP(MONTH('+a+')/3,0))',
-      '=IF('+a+'="","",TEXT('+a+',"YYYY-MM"))'
-    ]);
-  }
-  sh.getRange(R1,9,fml.length,5).setFormulas(fml);
+  // 헬퍼 수식 (ARRAYFORMULA 1칸씩 — 전 행 자동 계산, 매우 빠름)
+  var AR='$A$'+R1+':$A$'+R2;
+  sh.getRange('I'+R1).setFormula('=ARRAYFORMULA(IF('+AR+'="","",YEAR('+AR+')))');
+  sh.getRange('J'+R1).setFormula('=ARRAYFORMULA(IF('+AR+'="","",MONTH('+AR+')))');
+  sh.getRange('K'+R1).setFormula('=ARRAYFORMULA(IF('+AR+'="","",WEEKNUM('+AR+',2)))');
+  sh.getRange('L'+R1).setFormula('=ARRAYFORMULA(IF('+AR+'="","",ROUNDUP(MONTH('+AR+')/3,0)))');
+  sh.getRange('M'+R1).setFormula('=ARRAYFORMULA(IF('+AR+'="","",TEXT('+AR+',"YYYY-MM")))');
 
   // 서식 (범위 배치)
   var all=sh.getRange('A'+R1+':M'+R2); all.setFontFamily(F);
